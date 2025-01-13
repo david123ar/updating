@@ -1,61 +1,52 @@
 const { MongoClient } = require('mongodb');
-// const fetch = require('node-fetch'); // Ensure you have installed `node-fetch`
+const axios = require('axios');
 
-(async () => {
-  const mongoUri = "mongodb://root:Imperial_king2004@145.223.118.168:27017/?authSource=admin";
-  const dbName = "mydatabase"; // Change the database name as needed
-  const client = new MongoClient(mongoUri);
+const mongoUri = "mongodb://root:Imperial_king2004@145.223.118.168:27017/?authSource=admin";
+const dbName = "mydatabase";
+const client = new MongoClient(mongoUri);
 
+async function fetchAndUpdateAnimeData() {
   try {
+    // Connect to the MongoDB database
     await client.connect();
     const db = client.db(dbName);
-    const episodesCollection = db.collection("episodesStream");
+    const episodesCollection = db.collection("animeInfo");
 
-    // Fetch all IDs from the collection
-    const cursor = episodesCollection.find({}, { projection: { _id: 1 } });
-    const ids = await cursor.toArray();
+    // Fetch all anime documents
+    const animeData = await episodesCollection.find({}).toArray();
 
-    for (const { _id } of ids) {
-      console.log(`Processing ID: ${_id}`);
-      
-      // Initialize an object to store updated streams data
-      const streamsData = {};
+    for (const anime of animeData) {
+      const animeId = anime._id;
 
-      // Fetch data for 'raw', 'sub', and 'dub'
-      const types = ['raw', 'sub', 'dub'];
-      for (const type of types) {
-        try {
-          const response = await fetch(`https://vimal.animoon.me/api/stream?id=${_id}&server=hd-1&type=${type}`, {
-            cache: "no-store",
-          });
-          const data = await response.json();
-          streamsData[type] = {
-            success: data.success || false,
-            results: data.results || {},
-          };
-        } catch (error) {
-          console.error(`Error fetching data for ID: ${_id}, type: ${type}`, error);
-          streamsData[type] = { success: false, results: {} };
-        }
-      }
+      // Fetch episode data
+      const episodeResponse = await axios.get(`https://vimal.animoon.me/api/episodes/${animeId}`);
+      const episodeData = episodeResponse.data;
 
-      // Update the document in the database
-      const updateResult = await episodesCollection.updateOne(
-        { _id },
-        {
-          $set: {
-            streams: streamsData,
-          },
-        }
+      // Fetch additional info
+      const infoResponse = await axios.get(`https://vimal.animoon.me/api/info?id=${animeId}`);
+      const infoData = infoResponse.data;
+
+      // Prepare the updated anime document with info first and episodes at the bottom
+      const updatedAnime = {
+        _id: animeId,
+        info: infoData, // info first
+        episodes: episodeData, // episodes at the bottom
+      };
+
+      // Replace the document with the updated one
+      await episodesCollection.replaceOne(
+        { _id: animeId }, // Find the document with the given _id
+        updatedAnime, // Replace it with the updated document
+        { upsert: false } // Set upsert to false to avoid creating a new document if not found
       );
 
-      console.log(`Updated ID: ${_id}`, updateResult.modifiedCount > 0 ? 'Success' : 'No changes made');
+      console.log(`Replaced anime with ID: ${animeId}`);
     }
-
-    console.log('Processing complete.');
   } catch (error) {
-    console.error('Error:', error);
+    console.error("Error fetching or updating anime data:", error);
   } finally {
     await client.close();
   }
-})();
+}
+
+fetchAndUpdateAnimeData();
