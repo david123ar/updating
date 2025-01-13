@@ -29,13 +29,6 @@ async function processBatch(batch, episodesCollection) {
   const streamsUpdatePromises = batch.map(async ({ _id }) => {
     console.log(`Processing ID: ${_id}`);
 
-    // Check if the document already has update: true
-    const existingDoc = await episodesCollection.findOne({ _id });
-    if (existingDoc && existingDoc.update) {
-      console.log(`Skipping ID: ${_id} because it's already updated.`);
-      return null; // Skip if the update flag is already true
-    }
-
     const types = ["raw", "sub", "dub"];
     const streamsData = {};
 
@@ -103,7 +96,7 @@ async function processBatch(batch, episodesCollection) {
     console.log(`Total IDs to process: ${ids.length}`);
 
     // Process IDs in batches of 10
-    const batchSize = 10;
+    const batchSize = 5;
     for (let i = 0; i < ids.length; i += batchSize) {
       const batch = ids.slice(i, i + batchSize);
       console.log(
