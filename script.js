@@ -95,7 +95,7 @@ async function processBatch(batch, episodesCollection) {
     console.log(`Total IDs to process: ${ids.length}`);
 
     // Process IDs in batches of 10
-    const batchSize = 30; // Changed from 20 to 10
+    const batchSize = 100; // Changed from 20 to 10
     for (let i = 0; i < ids.length; i += batchSize) {
       const batch = ids.slice(i, i + batchSize);
       console.log(
