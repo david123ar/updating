@@ -78,16 +78,22 @@ async function processDocument(_id, episodesCollection, updatedCount, remainingI
     // Fetch all IDs from the collection
     const cursor = episodesCollection.find({}, { projection: { _id: 1 } });
     const ids = await cursor.toArray();
-    ids.reverse(); // Reverse to start from the last ID
 
-    console.log(`Total IDs to process: ${ids.length}`);
+    console.log(`Total IDs fetched: ${ids.length}`);
+
+    // Skip the first 20,000 IDs
+    const startingPoint = 20000;
+    const remainingIdsToProcess = ids.slice(startingPoint);
+
+    console.log(`Processing IDs from position: ${startingPoint}`);
+    console.log(`Remaining IDs to process: ${remainingIdsToProcess.length}`);
 
     // Initialize counters
     let updatedCount = 0;
-    const remainingIds = new Set(ids.map(({ _id }) => _id));
+    const remainingIds = new Set(remainingIdsToProcess.map(({ _id }) => _id));
 
     // Process each ID one by one
-    for (const { _id } of ids) {
+    for (const { _id } of remainingIdsToProcess) {
       updatedCount = await processDocument(_id, episodesCollection, updatedCount, remainingIds);
 
       // Log remaining IDs and updated count periodically
