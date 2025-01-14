@@ -1,18 +1,15 @@
 const { MongoClient } = require("mongodb");
-// const fetch = require('node-fetch'); // Ensure you have installed `node-fetch`
 
 const mongoUri =
   "mongodb://root:Imperial_king2004@145.223.118.168:27017/?authSource=admin";
-const dbName = "mydatabase"; // Change the database name as needed
+const dbName = "mydatabase";
 const client = new MongoClient(mongoUri);
 
 async function fetchStreamData(_id, type) {
   try {
     const response = await fetch(
       `https://vimal.animoon.me/api/stream?id=${_id}&server=hd-1&type=${type}`,
-      {
-        cache: "no-store",
-      }
+      { cache: "no-store" }
     );
     const data = await response.json();
     return {
@@ -25,61 +22,51 @@ async function fetchStreamData(_id, type) {
   }
 }
 
-async function processBatch(batch, episodesCollection) {
-  const streamsUpdatePromises = batch.map(async ({ _id }) => {
-    console.log(`Processing ID: ${_id}`);
+async function processDocument(_id, episodesCollection, updatedCount, remainingIds) {
+  console.log(`Processing ID: ${_id}`);
 
-    const types = ["raw", "sub", "dub"];
-    const streamsData = {};
-
-    // Fetch stream data for each type in parallel
-    const fetchPromises = types.map((type) => fetchStreamData(_id, type));
-    const results = await Promise.all(fetchPromises);
-
-    // Check if any result is unsuccessful, skip the update if there's an error
-    const hasError = results.some((result) => !result.success);
-
-    if (hasError) {
-      console.log(`Skipping update for ID: ${_id} due to fetch errors.`);
-      return null; // Return null if there's an error
-    }
-
-    // Map results to streamsData
-    types.forEach((type, index) => {
-      streamsData[type] = results[index];
-    });
-
-    return { _id, streamsData };
-  });
-
-  const updates = await Promise.all(streamsUpdatePromises);
-
-  // Filter out null values (errors or skipped updates)
-  const validUpdates = updates.filter(update => update !== null);
-
-  if (validUpdates.length > 0) {
-    // Update each document in the database
-    const updatePromises = validUpdates.map(async ({ _id, streamsData }) => {
-      const updateResult = await episodesCollection.updateOne(
-        { _id },
-        {
-          $set: {
-            streams: streamsData,
-            update: true, // Set the update flag to true
-          },
-        }
-      );
-      return { _id, modifiedCount: updateResult.modifiedCount };
-    });
-
-    const updateResults = await Promise.all(updatePromises);
-    updateResults.forEach(({ _id, modifiedCount }) => {
-      console.log(
-        `Updated ID: ${_id}`,
-        modifiedCount > 0 ? "Success" : "No changes made"
-      );
-    });
+  // Check if the document has already been updated
+  const existingDoc = await episodesCollection.findOne({ _id, changed: true });
+  if (existingDoc) {
+    console.log(`Skipping ID: ${_id}, already updated.`);
+    remainingIds.delete(_id);
+    return updatedCount;
   }
+
+  const types = ["raw", "sub", "dub"];
+  const streamsData = {};
+
+  // Fetch stream data for each type
+  for (const type of types) {
+    const result = await fetchStreamData(_id, type);
+    if (!result.success) {
+      console.log(`Skipping ID: ${_id} due to fetch error for type: ${type}`);
+      return updatedCount; // Skip the current document if any fetch fails
+    }
+    streamsData[type] = result;
+  }
+
+  // Update the document in the database
+  const updateResult = await episodesCollection.updateOne(
+    { _id },
+    {
+      $set: {
+        streams: streamsData,
+        update: true, // Mark as updated
+        changed: true, // Add the `changed` field
+      },
+    }
+  );
+
+  if (updateResult.modifiedCount > 0) {
+    console.log(`Updated ID: ${_id} successfully.`);
+    updatedCount++;
+  } else {
+    console.log(`No changes made for ID: ${_id}.`);
+  }
+
+  remainingIds.delete(_id);
+  return updatedCount;
 }
 
 (async () => {
@@ -88,31 +75,29 @@ async function processBatch(batch, episodesCollection) {
     const db = client.db(dbName);
     const episodesCollection = db.collection("episodesStream");
 
-    // Fetch all IDs from the collection and reverse the order (start from the last)
+    // Fetch all IDs from the collection
     const cursor = episodesCollection.find({}, { projection: { _id: 1 } });
     const ids = await cursor.toArray();
     ids.reverse(); // Reverse to start from the last ID
 
     console.log(`Total IDs to process: ${ids.length}`);
 
-    // Process IDs in batches of 10
-    const batchSize = 5;
-    for (let i = 0; i < ids.length; i += batchSize) {
-      const batch = ids.slice(i, i + batchSize);
-      console.log(
-        `Processing batch ${Math.floor(i / batchSize) + 1}, IDs ${
-          i + 1
-        }-${Math.min(i + batchSize, ids.length)}`
-      );
+    // Initialize counters
+    let updatedCount = 0;
+    const remainingIds = new Set(ids.map(({ _id }) => _id));
 
-      await processBatch(batch, episodesCollection);
+    // Process each ID one by one
+    for (const { _id } of ids) {
+      updatedCount = await processDocument(_id, episodesCollection, updatedCount, remainingIds);
 
-      // Calculate and log remaining IDs
-      const remainingCount = ids.length - (i + batchSize);
-      console.log(`Remaining IDs in the collection: ${remainingCount}`);
+      // Log remaining IDs and updated count periodically
+      console.log(`Remaining IDs: ${remainingIds.size}`);
+      console.log(`Total updated IDs so far: ${updatedCount}`);
     }
 
     console.log("Processing complete.");
+    console.log(`Final count of updated IDs: ${updatedCount}`);
+    console.log(`Remaining IDs: ${Array.from(remainingIds)}`);
   } catch (error) {
     console.error("Error:", error);
   } finally {
