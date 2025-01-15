@@ -16,7 +16,7 @@ async function fetchDataAndUpdate() {
     console.log("Connected to MongoDB");
 
     const db = client.db(dbName);
-    const collection = db.collection("episodeStream");
+    const collection = db.collection("episodesStream");
 
     // Start from id >= 30000
     const episodes = await collection.find({ id: { $gte: "30000" } }).toArray();
