@@ -82,7 +82,7 @@ async function processDocument(_id, episodesCollection, updatedCount, remainingI
     console.log(`Total IDs fetched: ${ids.length}`);
 
     // Skip the first 20,000 IDs
-    const startingPoint = 0;
+    const startingPoint = 40000;
     const remainingIdsToProcess = ids.slice(startingPoint);
 
     console.log(`Processing IDs from position: ${startingPoint}`);
