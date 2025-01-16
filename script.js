@@ -4,73 +4,114 @@ const axios = require("axios");
 const mongoUri =
   "mongodb://root:Imperial_king2004@145.223.118.168:27017/?authSource=admin";
 const dbName = "mydatabase";
+const collectionName = "animeInfo";
+
 const client = new MongoClient(mongoUri);
 
-// Categories
-const categories = ["raw", "sub", "dub"];
+async function fetchInfoAPI(id) {
+  let infoData;
+  while (!infoData?.results?.data?.title) {
+    try {
+      const infoResponse = await axios.get(`https://vimal.animoon.me/api/info?id=${id}`);
+      infoData = infoResponse.data;
+      if (!infoData?.results?.data?.title) {
+        console.log(`No title found in info API response for ID ${id}. Retrying...`);
+      }
+    } catch (error) {
+      console.error("Error fetching info API:", error);
+      break; // Break out of the loop if there is an error
+    }
+  }
+  return infoData;
+}
 
-async function fetchDataAndUpdate() {
+async function fetchEpisodesAPI(id) {
+  let episodesData;
+  while (!episodesData?.results?.episodes?.length) {
+    try {
+      const episodesResponse = await axios.get(`https://vimal.animoon.me/api/episodes/${id}`);
+      episodesData = episodesResponse.data;
+      if (!episodesData?.results?.episodes?.length) {
+        console.log(`No episodes found in episodes API response for ID ${id}. Retrying...`);
+      }
+    } catch (error) {
+      console.error("Error fetching episodes API:", error);
+      break; // Break out of the loop if there is an error
+    }
+  }
+  return episodesData;
+}
+
+async function getIdDocs() {
   try {
-    // Connect to MongoDB
     await client.connect();
-    console.log("Connected to MongoDB");
+    console.log("Connected to the database.");
 
     const db = client.db(dbName);
-    const collection = db.collection("episodesStream");
+    const collection = db.collection(collectionName);
 
-    // Start from id >= 30000
-    const episodes = await collection.find({ id: { $gte: "0" } }).toArray();
+    // Step 1: Find documents that don't have either 'info.results.data.title' or 'episodes.results.episodes.title'
+    const documents = await collection.find({
+      $or: [
+        { "info.results.data.title": { $exists: false } },
+        { "episodes.results.episodes.title": { $exists: false } }
+      ]
+    }).toArray();
 
-    console.log(`Total episodes to process: ${episodes.length}`);
+    console.log(`${documents.length} documents found that do not have 'info.results.data.title' or 'episodes.results.episodes.title'`);
 
-    // Iterate over the episodes and update
-    for (const [index, episode] of episodes.entries()) {
-      const episodeId = episode.id;
-      console.log(`Remaining IDs to process: ${episodes.length - index - 1}`);
-      
-      // Fetch the data from the API for each category one by one
-      for (const category of categories) {
-        try {
-          console.log(`Fetching data for episodeId: ${episodeId} - Category: ${category}`);
-          
-          // Fetch the data from the API for the current category
-          const response = await axios.get(
-            `https://newgogo.animoon.me/api/data?episodeId=${episodeId}&category=${category}`
-          );
+    // Step 2: Loop through each document and fetch data from the APIs
+    for (let doc of documents) {
+      const id = doc._id;
+      let updates = {};
 
-          // Extract the full streamingLink object from the API response
-          const streamingLink = response.data;
-
-          // If streamingLink object exists, update the document in MongoDB
-          if (streamingLink) {
-            // Update the document for the respective category
-            const updateResult = await collection.updateOne(
-              { _id: episode._id },
-              {
-                $set: { [`streams.${category}.results.streamingLink`]: streamingLink },
-                $unset: { changed: "" } // Remove the `changed` field
-              }
-            );
-
-            console.log(`Updated streamingLink for episodeId: ${episodeId} - Category: ${category}`);
-          }
-        } catch (error) {
-          console.error(`Error fetching data for episodeId: ${episodeId} - Category: ${category}`, error.message);
+      // If 'info.results.data.title' is missing, fetch the info API
+      if (!doc.info?.results?.data?.title) {
+        const infoData = await fetchInfoAPI(id);
+        if (infoData?.results?.data?.title) {
+          updates["info"] = infoData.results;
         }
       }
 
-      // Log the updated ID
-      console.log(`Updated episodeId: ${episodeId}`);
+      // If 'episodes.results.episodes.title' is missing, fetch the episodes API
+      if (!doc.episodes?.results?.episodes?.length) {
+        const episodesData = await fetchEpisodesAPI(id);
+        if (episodesData?.results?.episodes?.length) {
+          updates["episodes"] = episodesData.results;
+        }
+      }
+
+      // If both 'info' and 'episodes' titles are missing, fetch both
+      if (!doc.info?.results?.data?.title && !doc.episodes?.results?.episodes?.length) {
+        const infoData = await fetchInfoAPI(id);
+        if (infoData?.results?.data?.title) {
+          updates["info"] = infoData.results;
+        }
+
+        const episodesData = await fetchEpisodesAPI(id);
+        if (episodesData?.results?.episodes?.length) {
+          updates["episodes"] = episodesData.results;
+        }
+      }
+
+      // If updates are found, apply them to the document
+      if (Object.keys(updates).length > 0) {
+        await collection.updateOne(
+          { _id: id },
+          { $set: updates }
+        );
+        console.log(`Document with ID ${id} updated.`);
+      } else {
+        console.log(`No relevant data to update for document ID ${id}`);
+      }
     }
 
-    console.log("Update process completed.");
   } catch (error) {
-    console.error("Error connecting to MongoDB", error.message);
+    console.error("Error fetching or updating documents:", error);
   } finally {
-    // Close MongoDB connection
     await client.close();
+    console.log("Connection closed.");
   }
 }
 
-// Run the function
-fetchDataAndUpdate();
+getIdDocs();
