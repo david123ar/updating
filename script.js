@@ -69,7 +69,7 @@ async function getIdDocs() {
       if (!doc.info?.results?.data?.title) {
         const infoData = await fetchInfoAPI(id);
         if (infoData?.results?.data?.title) {
-          updates["info"] = infoData.results;
+          updates["info"] = infoData;
         }
       }
 
@@ -77,7 +77,7 @@ async function getIdDocs() {
       if (!doc.episodes?.results?.episodes?.length) {
         const episodesData = await fetchEpisodesAPI(id);
         if (episodesData?.results?.episodes?.length) {
-          updates["episodes"] = episodesData.results;
+          updates["episodes"] = episodesData;
         }
       }
 
@@ -85,12 +85,12 @@ async function getIdDocs() {
       if (!doc.info?.results?.data?.title && !doc.episodes?.results?.episodes?.length) {
         const infoData = await fetchInfoAPI(id);
         if (infoData?.results?.data?.title) {
-          updates["info"] = infoData.results;
+          updates["info"] = infoData;
         }
 
         const episodesData = await fetchEpisodesAPI(id);
         if (episodesData?.results?.episodes?.length) {
-          updates["episodes"] = episodesData.results;
+          updates["episodes"] = episodesData;
         }
       }
 
