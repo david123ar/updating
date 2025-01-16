@@ -1,112 +1,76 @@
 const { MongoClient } = require("mongodb");
+const axios = require("axios");
 
 const mongoUri =
   "mongodb://root:Imperial_king2004@145.223.118.168:27017/?authSource=admin";
 const dbName = "mydatabase";
 const client = new MongoClient(mongoUri);
 
-async function fetchStreamData(_id, type) {
+// Categories
+const categories = ["raw", "sub", "dub"];
+
+async function fetchDataAndUpdate() {
   try {
-    const response = await fetch(
-      `https://vimal.animoon.me/api/stream?id=${_id}&server=hd-1&type=${type}`,
-      { cache: "no-store" }
-    );
-    const data = await response.json();
-    return {
-      success: data.success || false,
-      results: data.results || {},
-    };
-  } catch (error) {
-    console.error(`Error fetching data for ID: ${_id}, type: ${type}`, error);
-    return { success: false, results: {} };
-  }
-}
-
-async function processDocument(_id, episodesCollection, updatedCount, remainingIds) {
-  console.log(`Processing ID: ${_id}`);
-
-  // Check if the document has already been updated
-  const existingDoc = await episodesCollection.findOne({ _id, changed: true });
-  if (existingDoc) {
-    console.log(`Skipping ID: ${_id}, already updated.`);
-    remainingIds.delete(_id);
-    return updatedCount;
-  }
-
-  const types = ["raw", "sub", "dub"];
-  const streamsData = {};
-
-  // Fetch stream data for each type
-  for (const type of types) {
-    const result = await fetchStreamData(_id, type);
-    if (!result.success) {
-      console.log(`Skipping ID: ${_id} due to fetch error for type: ${type}`);
-      return updatedCount; // Skip the current document if any fetch fails
-    }
-    streamsData[type] = result;
-  }
-
-  // Update the document in the database
-  const updateResult = await episodesCollection.updateOne(
-    { _id },
-    {
-      $set: {
-        streams: streamsData,
-        update: true, // Mark as updated
-        changed: true, // Add the `changed` field
-      },
-    }
-  );
-
-  if (updateResult.modifiedCount > 0) {
-    console.log(`Updated ID: ${_id} successfully.`);
-    updatedCount++;
-  } else {
-    console.log(`No changes made for ID: ${_id}.`);
-  }
-
-  remainingIds.delete(_id);
-  return updatedCount;
-}
-
-(async () => {
-  try {
+    // Connect to MongoDB
     await client.connect();
+    console.log("Connected to MongoDB");
+
     const db = client.db(dbName);
-    const episodesCollection = db.collection("episodesStream");
+    const collection = db.collection("episodesStream");
 
-    // Fetch all IDs from the collection
-    const cursor = episodesCollection.find({}, { projection: { _id: 1 } });
-    const ids = await cursor.toArray();
+    // Start from id >= 30000
+    const episodes = await collection.find({ id: { $gte: "30000" } }).toArray();
 
-    console.log(`Total IDs fetched: ${ids.length}`);
+    console.log(`Total episodes to process: ${episodes.length}`);
 
-    // Skip the first 20,000 IDs
-    const startingPoint = 40000;
-    const remainingIdsToProcess = ids.slice(startingPoint);
+    // Iterate over the episodes and update
+    for (const [index, episode] of episodes.entries()) {
+      const episodeId = episode.id;
+      console.log(`Remaining IDs to process: ${episodes.length - index - 1}`);
+      
+      // Fetch the data from the API for each category one by one
+      for (const category of categories) {
+        try {
+          console.log(`Fetching data for episodeId: ${episodeId} - Category: ${category}`);
+          
+          // Fetch the data from the API for the current category
+          const response = await axios.get(
+            `https://newgogo.animoon.me/api/data?episodeId=${episodeId}&category=${category}`
+          );
 
-    console.log(`Processing IDs from position: ${startingPoint}`);
-    console.log(`Remaining IDs to process: ${remainingIdsToProcess.length}`);
+          // Extract the full streamingLink object from the API response
+          const streamingLink = response.data;
 
-    // Initialize counters
-    let updatedCount = 0;
-    const remainingIds = new Set(remainingIdsToProcess.map(({ _id }) => _id));
+          // If streamingLink object exists, update the document in MongoDB
+          if (streamingLink) {
+            // Update the document for the respective category
+            const updateResult = await collection.updateOne(
+              { _id: episode._id },
+              {
+                $set: { [`streams.${category}.results.streamingLink`]: streamingLink },
+                $unset: { changed: "" } // Remove the `changed` field
+              }
+            );
 
-    // Process each ID one by one 
-    for (const { _id } of remainingIdsToProcess) {
-      updatedCount = await processDocument(_id, episodesCollection, updatedCount, remainingIds);
+            console.log(`Updated streamingLink for episodeId: ${episodeId} - Category: ${category}`);
+          }
+        } catch (error) {
+          console.error(`Error fetching data for episodeId: ${episodeId} - Category: ${category}`, error.message);
+        }
+      }
 
-      // Log remaining IDs and updated count periodically
-      console.log(`Remaining IDs: ${remainingIds.size}`);
-      console.log(`Total updated IDs so far: ${updatedCount}`);
+      // Log the updated ID
+      console.log(`Updated episodeId: ${episodeId}`);
     }
 
-    console.log("Processing complete.");
-    console.log(`Final count of updated IDs: ${updatedCount}`);
-    console.log(`Remaining IDs: ${Array.from(remainingIds)}`);
+    console.log("Update process completed.");
   } catch (error) {
-    console.error("Error:", error);
+    console.error("Error connecting to MongoDB", error.message);
   } finally {
+    // Close MongoDB connection
     await client.close();
   }
-})();
+}
+
+// Run the function
+fetchDataAndUpdate();
