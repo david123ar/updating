@@ -19,7 +19,7 @@ async function fetchDataAndUpdate() {
     const collection = db.collection("episodesStream");
 
     // Start from id >= 30000
-    const episodes = await collection.find({ id: { $gte: "30000" } }).toArray();
+    const episodes = await collection.find({ id: { $gte: "0" } }).toArray();
 
     console.log(`Total episodes to process: ${episodes.length}`);
 
