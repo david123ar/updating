@@ -4,114 +4,188 @@ const axios = require("axios");
 const mongoUri =
   "mongodb://root:Imperial_king2004@145.223.118.168:27017/?authSource=admin";
 const dbName = "mydatabase";
-const collectionName = "animeInfo";
+const episodesStreamCollectionName = "episodesStream";
+const animeInfoCollectionName = "animeInfo";
 
-const client = new MongoClient(mongoUri);
+const MAX_RETRIES = 3;
 
-async function fetchInfoAPI(id) {
-  let infoData;
-  while (!infoData?.results?.data?.title) {
+async function fetchWithRetries(url, maxRetries) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const infoResponse = await axios.get(`https://vimal.animoon.me/api/info?id=${id}`);
-      infoData = infoResponse.data;
-      if (!infoData?.results?.data?.title) {
-        console.log(`No title found in info API response for ID ${id}. Retrying...`);
-      }
+      const response = await axios.get(url);
+      return response.data;
     } catch (error) {
-      console.error("Error fetching info API:", error);
-      break; // Break out of the loop if there is an error
+      console.error(`Attempt ${attempt} failed for URL: ${url}`);
+      if (attempt === maxRetries)
+        throw new Error(`Failed after ${maxRetries} attempts`);
     }
   }
-  return infoData;
 }
 
-async function fetchEpisodesAPI(id) {
-  let episodesData;
-  while (!episodesData?.results?.episodes?.length) {
-    try {
-      const episodesResponse = await axios.get(`https://vimal.animoon.me/api/episodes/${id}`);
-      episodesData = episodesResponse.data;
-      if (!episodesData?.results?.episodes?.length) {
-        console.log(`No episodes found in episodes API response for ID ${id}. Retrying...`);
-      }
-    } catch (error) {
-      console.error("Error fetching episodes API:", error);
-      break; // Break out of the loop if there is an error
-    }
-  }
-  return episodesData;
-}
+(async () => {
+  const client = new MongoClient(mongoUri);
 
-async function getIdDocs() {
   try {
     await client.connect();
-    console.log("Connected to the database.");
+    console.log("Connected to MongoDB");
 
     const db = client.db(dbName);
-    const collection = db.collection(collectionName);
+    const episodesStreamCollection = db.collection(
+      episodesStreamCollectionName
+    );
+    const animeInfoCollection = db.collection(animeInfoCollectionName);
 
-    // Step 1: Find documents that don't have either 'info.results.data.title' or 'episodes.results.episodes.title'
-    const documents = await collection.find({
-      $or: [
-        { "info.results.data.title": { $exists: false } },
-        { "episodes.results.episodes.title": { $exists: false } }
-      ]
-    }).toArray();
+    const episodes = await episodesStreamCollection.find().toArray();
 
-    console.log(`${documents.length} documents found that do not have 'info.results.data.title' or 'episodes.results.episodes.title'`);
+    for (const episode of episodes) {
+      const episodeId = episode._id.split("?")[0];
+      const animeInfo = await animeInfoCollection.findOne({ _id: episodeId });
 
-    // Step 2: Loop through each document and fetch data from the APIs
-    for (let doc of documents) {
-      const id = doc._id;
-      let updates = {};
-
-      // If 'info.results.data.title' is missing, fetch the info API
-      if (!doc.info?.results?.data?.title) {
-        const infoData = await fetchInfoAPI(id);
-        if (infoData?.results?.data?.title) {
-          updates["info"] = infoData;
-        }
+      if (!animeInfo) {
+        console.log(`No anime info found for ID '${episodeId}'`);
+        continue;
       }
 
-      // If 'episodes.results.episodes.title' is missing, fetch the episodes API
-      if (!doc.episodes?.results?.episodes?.length) {
-        const episodesData = await fetchEpisodesAPI(id);
-        if (episodesData?.results?.episodes?.length) {
-          updates["episodes"] = episodesData;
-        }
-      }
+      const tvInfo = animeInfo?.info?.results?.data?.animeInfo?.tvInfo;
+      const sub = tvInfo?.sub ?? null;
+      const dub = tvInfo?.dub ?? null;
 
-      // If both 'info' and 'episodes' titles are missing, fetch both
-      if (!doc.info?.results?.data?.title && !doc.episodes?.results?.episodes?.length) {
-        const infoData = await fetchInfoAPI(id);
-        if (infoData?.results?.data?.title) {
-          updates["info"] = infoData;
-        }
-
-        const episodesData = await fetchEpisodesAPI(id);
-        if (episodesData?.results?.episodes?.length) {
-          updates["episodes"] = episodesData;
-        }
-      }
-
-      // If updates are found, apply them to the document
-      if (Object.keys(updates).length > 0) {
-        await collection.updateOne(
-          { _id: id },
-          { $set: updates }
+      // Check for episode_no or number
+      const episodeNo = episode.episode_no || episode.number;
+      if (episodeNo === undefined) {
+        console.log(
+          `No valid episode number found for Episode ID '${episode._id}'`
         );
-        console.log(`Document with ID ${id} updated.`);
-      } else {
-        console.log(`No relevant data to update for document ID ${id}`);
+        continue;
+      }
+
+      console.log(`Processing Episode ID: ${episode._id}`);
+      console.log(
+        `Sub episodes available: ${sub}, Dub episodes available: ${dub}, Episode No: ${episodeNo}`
+      );
+
+      let subData = null;
+      let dubData = null;
+      let rawData = null;
+
+      // Fetch sub category
+      if (sub !== null && episodeNo <= sub) {
+        const subUrl = `https://newgogo.animoon.me/api/data?episodeId=${episode._id}&category=sub`;
+        try {
+          subData = await fetchWithRetries(subUrl, MAX_RETRIES);
+
+          if (
+            !subData?.link?.file ||
+            !subData?.tracks?.some((track) => track.file)
+          ) {
+            console.log(
+              `Invalid sub data for Episode ID '${episode._id}', skipping sub`
+            );
+            subData = null;
+          } else {
+            console.log("SubUrl", subData.link.file);
+            console.log("SubUrl", subData.track[0].file);
+            await episodesStreamCollection.updateOne(
+              { _id: episode._id },
+              {
+                $set: { "streams.sub.results.streamingLink": subData },
+                $unset: {
+                  "streams.sub.streamingLink": "",
+                  'update': "",
+                },
+              }
+            );
+            console.log(`Updated streams.sub for Episode ID '${episode._id}'`);
+          }
+        } catch (error) {
+          console.error(
+            `Sub category failed for Episode ID '${episode._id}' after ${MAX_RETRIES} retries`
+          );
+        }
+      }
+
+      // Fetch dub category
+      if (dub !== null && episodeNo <= dub) {
+        const dubUrl = `https://newgogo.animoon.me/api/data?episodeId=${episode._id}&category=dub`;
+        try {
+          dubData = await fetchWithRetries(dubUrl, MAX_RETRIES);
+
+          if (
+            !dubData?.link?.file ||
+            !dubData?.tracks?.some((track) => track.file)
+          ) {
+            console.log(
+              `Invalid dub data for Episode ID '${episode._id}', skipping dub`
+            );
+            dubData = null;
+          } else {
+            console.log("DubUrl", dubData.link.file);
+            console.log("DubUrl", dubData.track[0].file);
+            await episodesStreamCollection.updateOne(
+              { _id: episode._id },
+              {
+                $set: { "streams.dub.results.streamingLink": dubData },
+                $unset: {
+                  "streams.dub.streamingLink": "",
+                  "update": "",
+                },
+              }
+            );
+            console.log(`Updated streams.dub for Episode ID '${episode._id}'`);
+          }
+        } catch (error) {
+          console.error(
+            `Dub category failed for Episode ID '${episode._id}' after ${MAX_RETRIES} retries`
+          );
+        }
+      }
+
+      // Fetch raw category if both sub and dub failed
+      if (!subData && !dubData) {
+        const rawUrl = `https://newgogo.animoon.me/api/data?episodeId=${episode._id}&category=raw`;
+        try {
+          rawData = await fetchWithRetries(rawUrl, MAX_RETRIES);
+
+          if (
+            !rawData?.link?.file ||
+            !rawData?.tracks?.some((track) => track.file)
+          ) {
+            console.log(
+              `Invalid raw data for Episode ID '${episode._id}', skipping raw`
+            );
+            rawData = null;
+          } else {
+            console.log("RawUrl", rawData.link.file);
+            console.log("RawUrl", rawData.track[0].file);
+            await episodesStreamCollection.updateOne(
+              { _id: episode._id },
+              {
+                $set: { "streams.raw.results.streamingLink": rawData },
+                $unset: {
+                  "streams.raw.streamingLink": "",
+                  "update": "",
+                },
+              }
+            );
+            console.log(`Updated streams.raw for Episode ID '${episode._id}'`);
+          }
+        } catch (error) {
+          console.error(
+            `Raw category failed for Episode ID '${episode._id}' after ${MAX_RETRIES} retries`
+          );
+        }
+      }
+
+      // Skip document if all categories fail
+      if (!subData && !dubData && !rawData) {
+        console.log(`No valid data for Episode ID '${episode._id}', skipping`);
+        continue;
       }
     }
-
   } catch (error) {
-    console.error("Error fetching or updating documents:", error);
+    console.error("Error:", error);
   } finally {
     await client.close();
-    console.log("Connection closed.");
+    console.log("Disconnected from MongoDB");
   }
-}
-
-getIdDocs();
+})();
