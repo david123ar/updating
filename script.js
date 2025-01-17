@@ -83,8 +83,7 @@ async function fetchWithRetries(url, maxRetries) {
             );
             subData = null;
           } else {
-            console.log("SubUrl", subData.link.file);
-            console.log("SubUrl", subData.track[0].file);
+            console.log("SubUrl", subData?.link?.file);
             await episodesStreamCollection.updateOne(
               { _id: episode._id },
               {
@@ -119,8 +118,7 @@ async function fetchWithRetries(url, maxRetries) {
             );
             dubData = null;
           } else {
-            console.log("DubUrl", dubData.link.file);
-            console.log("DubUrl", dubData.track[0].file);
+            console.log("DubUrl", dubData?.link?.file);
             await episodesStreamCollection.updateOne(
               { _id: episode._id },
               {
@@ -155,8 +153,7 @@ async function fetchWithRetries(url, maxRetries) {
             );
             rawData = null;
           } else {
-            console.log("RawUrl", rawData.link.file);
-            console.log("RawUrl", rawData.track[0].file);
+            console.log("RawUrl", rawData?.link?.file);
             await episodesStreamCollection.updateOne(
               { _id: episode._id },
               {
